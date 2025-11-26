@@ -1,0 +1,109 @@
+// server.js (Lado del servidor Node.js)
+const express = require('express');
+const app = express();
+const http = require('http');
+const server = http.createServer(app);
+const { Server } = require("socket.io");
+const io = new Server(server);
+
+// Mapa para rastrear el estado de todos los jugadores
+const players = {};
+// Mapa para rastrear el estado de los coches NPC (para sincronizar entre jugadores)
+const serverCars = {};
+
+app.use(express.static(__dirname + '/')); // Sirve archivos estáticos (incluyendo el HTML)
+
+io.on('connection', (socket) => {
+  console.log('Un usuario se ha conectado:', socket.id);
+
+  // 1. Enviar el estado actual del juego al nuevo jugador
+  socket.emit('current_players', players);
+  // También enviar el estado de los coches NPC
+  socket.emit('car_sync', serverCars);
+
+  // 2. Manejar la unión del jugador
+  socket.on('player_join', (playerData) => {
+    players[socket.id] = {
+      id: socket.id,
+      x: playerData.x,
+      y: playerData.y,
+      angle: 0,
+      health: playerData.health,
+      inCar: null,
+      clothesColor: playerData.clothesColor,
+      skinColor: playerData.skinColor
+    };
+    // Notificar a todos los demás jugadores
+    socket.broadcast.emit('player_joined', players[socket.id]);
+  });
+
+  // 3. Manejar el movimiento del jugador
+  socket.on('player_movement', (movementData) => {
+    if (players[socket.id]) {
+      players[socket.id].x = movementData.x;
+      players[socket.id].y = movementData.y;
+      players[socket.id].angle = movementData.angle;
+      players[socket.id].health = movementData.health;
+      players[socket.id].inCar = movementData.inCar; // {id, x, y, angle}
+      // Reenviar a todos los demás jugadores
+      socket.broadcast.emit('player_moved', players[socket.id]);
+    }
+  });
+
+  // 4. Manejar el movimiento del coche (si un jugador lo conduce)
+  socket.on('car_movement', (carData) => {
+    // Actualizar el estado del coche en el servidor y retransmitir
+    serverCars[carData.id] = carData;
+    // Esto es muy ineficiente y alto en ancho de banda. En un juego real, se limitaría el ritmo.
+    socket.broadcast.emit('car_sync', carData); 
+  });
+  
+  // 5. Manejar la entrada/salida del coche
+  socket.on('enter_car', (carId) => {
+    if (players[socket.id]) players[socket.id].inCar = { id: carId };
+    // Marcar el coche como conducido por el jugador
+    serverCars[carId].driver = `player:${socket.id}`;
+  });
+
+  socket.on('eject_car', (carId) => {
+    if (players[socket.id]) players[socket.id].inCar = null;
+    serverCars[carId].driver = null; // Liberar el coche
+  });
+
+  // 6. Manejar el golpe de un jugador (Para server-side hit detection)
+  socket.on('player_hit', (hitData) => {
+    // EN UN JUEGO REAL, VALIDAR SI EL GOLPE FUE VÁLIDO AQUÍ!
+    // Para el ejemplo, solo disminuiremos la vida del objetivo.
+    if (players[hitData.targetId]) {
+      // players[hitData.targetId].health -= hitData.damage;
+      // console.log(`Player ${hitData.targetId} golpeado. Vida: ${players[hitData.targetId].health}`);
+      // io.to(hitData.targetId).emit('take_damage', hitData.damage);
+      // Simplemente ignoramos para la demostración, ya que el cliente local lo maneja.
+    }
+  });
+
+
+  // 7. Manejar la desconexión
+  socket.on('disconnect', () => {
+    console.log('Un usuario se ha desconectado:', socket.id);
+    delete players[socket.id];
+    // Notificar a todos los demás jugadores
+    socket.broadcast.emit('player_left', socket.id);
+  });
+});
+
+// Inicializar un estado básico de coches NPC en el servidor
+// Esto debería cargarse desde el estado inicial de initWorld()
+// Para simplificar, asumimos que los coches tienen IDs iniciales.
+for(let i=0; i<10; i++) {
+    serverCars[`initial_car_${i}`] = { 
+        id: `initial_car_${i}`, 
+        x: 0, y: 0, angle: 0, health: 150, driver: 'ai', type: 'civilian' 
+    };
+}
+
+
+const port = 3000;
+server.listen(port, () => {
+  console.log(`Servidor de juego corriendo en http://localhost:${port}`);
+});
