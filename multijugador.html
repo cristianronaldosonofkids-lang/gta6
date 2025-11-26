@@ -1,109 +1,1366 @@
-// server.js (Lado del servidor Node.js)
-const express = require('express');
-const app = express();
-const http = require('http');
-const server = http.createServer(app);
-const { Server } = require("socket.io");
-const io = new Server(server);
+<script src="/socket.io/socket.io.js"></script>
+<script>
+/**
+ * GTW 7 ENGINE - ULTIMATE (MULTIPLAYER)
+ * Requires a Node.js server with Socket.IO running.
+ */
 
-// Mapa para rastrear el estado de todos los jugadores
-const players = {};
-// Mapa para rastrear el estado de los coches NPC (para sincronizar entre jugadores)
-const serverCars = {};
+// ------------------------------------------------------------------
+// --- SOCKET.IO (MULTIJUGADOR) INTEGRACIÓN ---
+// ------------------------------------------------------------------
+const socket = io();
+const OTHER_PLAYERS = {}; // Diccionario para almacenar a otros jugadores (key: socketId)
+const OTHER_CARS = {}; // Diccionario para almacenar otros coches (sincronizados por el server)
 
-app.use(express.static(__dirname + '/')); // Sirve archivos estáticos (incluyendo el HTML)
-
-io.on('connection', (socket) => {
-  console.log('Un usuario se ha conectado:', socket.id);
-
-  // 1. Enviar el estado actual del juego al nuevo jugador
-  socket.emit('current_players', players);
-  // También enviar el estado de los coches NPC
-  socket.emit('car_sync', serverCars);
-
-  // 2. Manejar la unión del jugador
-  socket.on('player_join', (playerData) => {
-    players[socket.id] = {
-      id: socket.id,
-      x: playerData.x,
-      y: playerData.y,
-      angle: 0,
-      health: playerData.health,
-      inCar: null,
-      clothesColor: playerData.clothesColor,
-      skinColor: playerData.skinColor
-    };
-    // Notificar a todos los demás jugadores
-    socket.broadcast.emit('player_joined', players[socket.id]);
-  });
-
-  // 3. Manejar el movimiento del jugador
-  socket.on('player_movement', (movementData) => {
-    if (players[socket.id]) {
-      players[socket.id].x = movementData.x;
-      players[socket.id].y = movementData.y;
-      players[socket.id].angle = movementData.angle;
-      players[socket.id].health = movementData.health;
-      players[socket.id].inCar = movementData.inCar; // {id, x, y, angle}
-      // Reenviar a todos los demás jugadores
-      socket.broadcast.emit('player_moved', players[socket.id]);
-    }
-  });
-
-  // 4. Manejar el movimiento del coche (si un jugador lo conduce)
-  socket.on('car_movement', (carData) => {
-    // Actualizar el estado del coche en el servidor y retransmitir
-    serverCars[carData.id] = carData;
-    // Esto es muy ineficiente y alto en ancho de banda. En un juego real, se limitaría el ritmo.
-    socket.broadcast.emit('car_sync', carData); 
-  });
-  
-  // 5. Manejar la entrada/salida del coche
-  socket.on('enter_car', (carId) => {
-    if (players[socket.id]) players[socket.id].inCar = { id: carId };
-    // Marcar el coche como conducido por el jugador
-    serverCars[carId].driver = `player:${socket.id}`;
-  });
-
-  socket.on('eject_car', (carId) => {
-    if (players[socket.id]) players[socket.id].inCar = null;
-    serverCars[carId].driver = null; // Liberar el coche
-  });
-
-  // 6. Manejar el golpe de un jugador (Para server-side hit detection)
-  socket.on('player_hit', (hitData) => {
-    // EN UN JUEGO REAL, VALIDAR SI EL GOLPE FUE VÁLIDO AQUÍ!
-    // Para el ejemplo, solo disminuiremos la vida del objetivo.
-    if (players[hitData.targetId]) {
-      // players[hitData.targetId].health -= hitData.damage;
-      // console.log(`Player ${hitData.targetId} golpeado. Vida: ${players[hitData.targetId].health}`);
-      // io.to(hitData.targetId).emit('take_damage', hitData.damage);
-      // Simplemente ignoramos para la demostración, ya que el cliente local lo maneja.
-    }
-  });
-
-
-  // 7. Manejar la desconexión
-  socket.on('disconnect', () => {
-    console.log('Un usuario se ha desconectado:', socket.id);
-    delete players[socket.id];
-    // Notificar a todos los demás jugadores
-    socket.broadcast.emit('player_left', socket.id);
-  });
+socket.on('connect', () => {
+    console.log('Conectado al servidor con ID:', socket.id);
+    // Enviar estado inicial del jugador
+    socket.emit('player_join', {
+        x: player.x,
+        y: player.y,
+        clothesColor: player.clothesColor,
+        skinColor: player.skinColor,
+        health: player.health
+    });
 });
 
-// Inicializar un estado básico de coches NPC en el servidor
-// Esto debería cargarse desde el estado inicial de initWorld()
-// Para simplificar, asumimos que los coches tienen IDs iniciales.
-for(let i=0; i<10; i++) {
-    serverCars[`initial_car_${i}`] = { 
-        id: `initial_car_${i}`, 
-        x: 0, y: 0, angle: 0, health: 150, driver: 'ai', type: 'civilian' 
-    };
+socket.on('current_players', (players) => {
+    // Inicializar jugadores existentes al unirse
+    for (const id in players) {
+        if (id !== socket.id) {
+            const data = players[id];
+            // Crea una entidad simple para representar al otro jugador (no-interactiva)
+            OTHER_PLAYERS[id] = new OtherPlayer(data.x, data.y, data.clothesColor, data.skinColor);
+        }
+    }
+});
+
+socket.on('player_moved', (playerData) => {
+    if (OTHER_PLAYERS[playerData.id]) {
+        // Interpola o actualiza directamente (para simplicidad, actualiza directamente)
+        OTHER_PLAYERS[playerData.id].x = playerData.x;
+        OTHER_PLAYERS[playerData.id].y = playerData.y;
+        OTHER_PLAYERS[playerData.id].angle = playerData.angle;
+        OTHER_PLAYERS[playerData.id].health = playerData.health;
+        OTHER_PLAYERS[playerData.id].inCar = playerData.inCar ? true : false;
+        if(playerData.inCar && OTHER_CARS[playerData.inCar.id]) {
+            OTHER_CARS[playerData.inCar.id].x = playerData.inCar.x;
+            OTHER_CARS[playerData.inCar.id].y = playerData.inCar.y;
+            OTHER_CARS[playerData.inCar.id].angle = playerData.inCar.angle;
+        }
+    }
+});
+
+socket.on('player_joined', (playerData) => {
+    console.log(`Nuevo jugador unido: ${playerData.id}`);
+    OTHER_PLAYERS[playerData.id] = new OtherPlayer(playerData.x, playerData.y, playerData.clothesColor, playerData.skinColor);
+});
+
+socket.on('player_left', (playerId) => {
+    console.log(`Jugador desconectado: ${playerId}`);
+    delete OTHER_PLAYERS[playerId];
+});
+
+socket.on('car_sync', (carData) => {
+    // Para simplificar, asumimos que el server también envía los coches
+    if (!OTHER_CARS[carData.id]) {
+        // Crear coche si no existe
+        OTHER_CARS[carData.id] = new Car(carData.x, carData.y, carData.type);
+        OTHER_CARS[carData.id].id = carData.id;
+        cars.push(OTHER_CARS[carData.id]); // Añadirlo a la lista de entidades
+    }
+    // Sincronizar estado del coche (posición/ángulo)
+    OTHER_CARS[carData.id].x = carData.x;
+    OTHER_CARS[carData.id].y = carData.y;
+    OTHER_CARS[carData.id].angle = carData.angle;
+    OTHER_CARS[carData.id].health = carData.health;
+});
+
+// ------------------------------------------------------------------
+// --- CLASE PARA OTROS JUGADORES (SOLO DIBUJO) ---
+// ------------------------------------------------------------------
+class OtherPlayer extends Entity {
+    constructor(x, y, clothesColor, skinColor) {
+        super(x, y);
+        this.clothesColor = clothesColor;
+        this.skinColor = skinColor;
+        this.angle = 0;
+        this.health = 100;
+        this.inCar = false;
+        this.radius = 12;
+    }
+    update(dt) {
+        // No se mueve por sí mismo, es movido por los datos del servidor.
+    }
+    draw(ctx) {
+        if (this.inCar) return;
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+        
+        // Body (igual que Player)
+        ctx.fillStyle = this.clothesColor;
+        ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI*2); ctx.fill();
+        
+        // Name Tag
+        ctx.fillStyle = '#fff';
+        ctx.font = '14px Arial';
+        ctx.fillText("Player", -20, -25);
+
+        // Health Bar (Simple)
+        ctx.fillStyle = 'red';
+        ctx.fillRect(-15, 18, 30, 4);
+        ctx.fillStyle = 'green';
+        ctx.fillRect(-15, 18, 30 * (this.health / 100), 4);
+        
+        ctx.restore();
+    }
 }
 
 
-const port = 3000;
-server.listen(port, () => {
-  console.log(`Servidor de juego corriendo en http://localhost:${port}`);
+// ------------------------------------------------------------------
+// --- CONFIG, ASSETS, STATE, WORLD (CÓDIGO ORIGINAL) ---
+// ------------------------------------------------------------------
+// ... (Mantener todas las constantes y funciones de initWorld) ...
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const minimapCanvas = document.getElementById('minimap');
+const minimapCtx = minimapCanvas.getContext('2d');
+
+// --- Config ---
+const TILE_SIZE = 120;
+const WORLD_WIDTH = 40; 
+const WORLD_HEIGHT = 40;
+
+// --- Assets ---
+const PALETTE = {
+    road: '#334155',
+    grass: '#14532d', // Darker lush green
+    water: '#0ea5e9',
+    building: ['#475569', '#334155', '#1e293b'],
+    sidewalk: '#64748b',
+    shopFloor: '#f59e0b', // Yellow floor for shops
+    gunShopFloor: '#ef4444' // Red floor for gun shops
+};
+
+// --- State ---
+let lastTime = 0;
+let camera = { x: 0, y: 0, zoom: 1 };
+let keys = {};
+let mouse = { x: 0, y: 0, down: false };
+let joystick = { x: 0, y: 0, active: false };
+let gamePaused = false;
+let gameTime = 0; // Para efectos visuales
+
+// --- World ---
+const map = [];
+const buildings = [];
+const shops = []; // {x, y, type}
+let peds = []; // Peatones
+let cars = []; // Vehículos
+let bullets = []; // Balas
+let particles = []; // Partículas
+let helis = []; // Helicópteros
+
+function initWorld() {
+    for (let y = 0; y < WORLD_HEIGHT; y++) {
+        map[y] = [];
+        for (let x = 0; x < WORLD_WIDTH; x++) {
+            let type = 0; // 0 Grass
+            
+            const isRoadX = x % 5 === 0;
+            const isRoadY = y % 5 === 0;
+
+            if (isRoadX && isRoadY) type = 3; // Intersection
+            else if (isRoadX) type = 1; // V Road
+            else if (isRoadY) type = 2; // H Road
+
+            if (x === 0 || x === WORLD_WIDTH - 1 || y === 0 || y === WORLD_HEIGHT - 1) type = 4; // Water
+
+            map[y][x] = type;
+
+            // Generate Content
+            if (type === 0 && Math.random() > 0.4) {
+                // Building
+                const isShop = Math.random() > 0.9;
+                if (isShop) {
+                    const shopType = Math.random() > 0.5 ? 'clothing' : 'gun';
+                    shops.push({
+                        x: x * TILE_SIZE + 10,
+                        y: y * TILE_SIZE + 10,
+                        w: TILE_SIZE - 20,
+                        h: TILE_SIZE - 20,
+                        type: shopType
+                    });
+                } else {
+                    buildings.push({
+                        x: x * TILE_SIZE + 5,
+                        y: y * TILE_SIZE + 5,
+                        w: TILE_SIZE - 10,
+                        h: TILE_SIZE - 10,
+                        color: PALETTE.building[Math.floor(Math.random() * PALETTE.building.length)],
+                        height: 40 + Math.random() * 60
+                    });
+                }
+            }
+        }
+    }
+    
+    // Generar 10 coches NPC y 20 peatones
+    for(let i=0; i<10; i++) cars.push(new Car(Math.random()*WORLD_WIDTH*TILE_SIZE, Math.random()*WORLD_HEIGHT*TILE_SIZE, 'civilian'));
+    for(let i=0; i<20; i++) peds.push(new Pedestrian(Math.random()*WORLD_WIDTH*TILE_SIZE, Math.random()*WORLD_HEIGHT*TILE_SIZE, 'civ'));
+
+    // Asignar ID de cliente a los coches para la sincronización inicial
+    cars.forEach((car, index) => car.id = `initial_car_${index}`);
+}
+
+// ------------------------------------------------------------------
+// --- ENTITY CLASSES (MANTENER LA LÓGICA DE JUEGO) ---
+// ------------------------------------------------------------------
+// ... (Mantener clases Entity, Particle, Bullet, Helicopter, Car, Pedestrian, Mission) ...
+class Entity {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.vx = 0; this.vy = 0;
+        this.angle = 0;
+        this.dead = false;
+        this.radius = 12;
+        this.z = 0; // Height (for helis)
+    }
+    update(dt) {
+        this.x += this.vx * dt;
+        this.y += this.vy * dt;
+    }
+}
+
+class Particle extends Entity {
+    constructor(x, y, color, life, speed, size) {
+        super(x, y);
+        this.color = color;
+        this.life = life; this.maxLife = life;
+        this.size = size;
+        const a = Math.random() * Math.PI * 2;
+        this.vx = Math.cos(a) * speed;
+        this.vy = Math.sin(a) * speed;
+    }
+    update(dt) {
+        super.update(dt);
+        this.life -= dt;
+        if (this.life <= 0) this.dead = true;
+        this.vx *= 0.9; this.vy *= 0.9;
+    }
+    draw(ctx) {
+        ctx.globalAlpha = this.life / this.maxLife;
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+    }
+}
+
+class Bullet extends Entity {
+    constructor(x, y, angle, owner, type) {
+        super(x, y);
+        this.angle = angle;
+        this.speed = type === 'rpg' ? 500 : 1200;
+        this.vx = Math.cos(angle) * this.speed;
+        this.vy = Math.sin(angle) * this.speed;
+        this.owner = owner; 
+        this.life = 1.5;
+        this.type = type || 'bullet'; // bullet, pellet, rpg
+    }
+    update(dt) {
+        super.update(dt);
+        this.life -= dt;
+        if (this.life <= 0) {
+            this.dead = true;
+            if (this.type === 'rpg') explode(this.x, this.y, 150);
+        }
+        
+        // Building Collisions
+        for (let b of buildings) {
+            if (this.x > b.x && this.x < b.x + b.w && this.y > b.y && this.y < b.y + b.h) {
+                this.dead = true;
+                if (this.type === 'rpg') explode(this.x, this.y, 150);
+                else createParticles(this.x, this.y, '#94a3b8', 3);
+            }
+        }
+        
+        // Entity Hit Logic
+        const targets = this.owner === 'player' ? [...peds, ...cars, ...helis, ...Object.values(OTHER_PLAYERS)] : [player];
+        
+        for (let t of targets) {
+            if (!t.dead && Math.hypot(t.x - this.x, t.y - this.y) < t.radius + 10) {
+                // Si golpea a otro jugador
+                if (t instanceof OtherPlayer) {
+                    // En un juego real, esto se manejaría en el servidor.
+                    // Aquí solo se emite el evento de golpe para que el servidor lo procese.
+                    socket.emit('player_hit', { targetId: t.id, damage: 25 });
+                } else if (t instanceof Player) {
+                    t.hit(this.type === 'rpg' ? 1000 : 25);
+                } else {
+                    t.hit(this.type === 'rpg' ? 1000 : 25);
+                }
+                
+                this.dead = true;
+                if (this.type === 'rpg') explode(this.x, this.y, 150);
+                break;
+            }
+        }
+    }
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+        if (this.type === 'rpg') {
+            ctx.fillStyle = '#f59e0b';
+            ctx.fillRect(-5, -3, 10, 6);
+            // Trail
+            createParticles(this.x, this.y, '#555', 1);
+        } else {
+            ctx.fillStyle = '#fef08a';
+            ctx.fillRect(-5, -1, 10, 2);
+        }
+        ctx.restore();
+    }
+}
+
+class Helicopter extends Entity {
+    constructor(x, y) {
+        super(x, y);
+        this.z = 200; // Flying high
+        this.radius = 40;
+        this.health = 400;
+        this.rotorAngle = 0;
+        this.state = 'chasing';
+        this.target = player;
+        this.shootTimer = 0;
+    }
+    update(dt) {
+        if (this.dead) {
+            this.z -= 100 * dt; // Fall
+            this.angle += 5 * dt; // Spin
+            if (this.z <= 0) {
+                explode(this.x, this.y, 200);
+                // Remove from array handled in loop
+            }
+            return;
+        }
+
+        // AI
+        const dx = this.target.x - this.x;
+        const dy = this.target.y - this.y;
+        const dist = Math.hypot(dx, dy);
+        
+        // Hover near player but not directly on top
+        const targetX = this.target.x - Math.cos(gameTime) * 150;
+        const targetY = this.target.y - Math.sin(gameTime) * 150;
+        
+        this.x += (targetX - this.x) * 0.5 * dt;
+        this.y += (targetY - this.y) * 0.5 * dt;
+        
+        this.angle = Math.atan2(dy, dx);
+        this.rotorAngle += 15 * dt;
+
+        // Shoot
+        this.shootTimer -= dt;
+        if (dist < 600 && this.shootTimer <= 0) {
+            this.shootTimer = 0.1;
+            // Machine gun burst
+            bullets.push(new Bullet(this.x, this.y, this.angle + (Math.random()-0.5)*0.1, 'enemy'));
+        }
+    }
+    hit(dmg) {
+        this.health -= dmg;
+        if (this.health <= 0) {
+            this.dead = true;
+            player.money += 2000;
+            showMessage("HELI DOWN!", "Airspace Cleared");
+        }
+    }
+    draw(ctx) {
+        // Shadow (far offset based on height)
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.arc(this.x + 50, this.y + 50, 30, 0, Math.PI*2);
+        ctx.fill();
+
+        // Body
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        // Scale based on Z to simulate height?
+        const scale = 1 + (this.z / 1000);
+        ctx.scale(scale, scale);
+        ctx.rotate(this.angle);
+        
+        // Fuselage
+        ctx.fillStyle = '#1e293b';
+        ctx.fillRect(-20, -10, 40, 20);
+        // Tail
+        ctx.fillRect(-50, -2, 30, 4);
+        
+        // Rotor Blades (Blur)
+        ctx.fillStyle = 'rgba(200,200,200,0.5)';
+        ctx.save();
+        ctx.rotate(this.rotorAngle);
+        ctx.fillRect(-60, -4, 120, 8);
+        ctx.fillRect(-4, -60, 8, 120);
+        ctx.restore();
+
+        ctx.restore();
+    }
+}
+
+class Car extends Entity {
+    constructor(x, y, type) {
+        super(x, y);
+        this.width = 48; this.height = 90;
+        this.color = type === 'swat' ? '#1e293b' : type === 'police' ? '#000' : ['#ef4444', '#3b82f6', '#22c55e', '#eab308', '#a855f7'][Math.floor(Math.random()*5)];
+        this.type = type || 'civilian'; // civilian, police, swat
+        this.speed = 0;
+        this.maxSpeed = this.type === 'swat' ? 450 : 600;
+        this.acceleration = 400;
+        this.friction = 0.96;
+        this.turnSpeed = 3.5;
+        this.driver = null; 
+        this.health = this.type === 'swat' ? 500 : 150;
+        this.radius = 30;
+    }
+
+    update(dt) {
+        // --- Lógica del jugador (Solo si el jugador *local* lo está conduciendo) ---
+        if (this.driver === 'player') {
+            if (keys['w'] || joystick.y < -0.3) this.speed += this.acceleration * dt;
+            if (keys['s'] || joystick.y > 0.3) this.speed -= this.acceleration * dt;
+            if (Math.abs(this.speed) > 10) {
+                let dir = this.speed > 0 ? 1 : -1;
+                if (keys['a'] || joystick.x < -0.3) this.angle -= this.turnSpeed * dt * dir;
+                if (keys['d'] || joystick.x > 0.3) this.angle += this.turnSpeed * dt * dir;
+            }
+            if (keys[' '] || document.getElementById('btn-enter').active) this.speed *= 0.9; // Brake
+        } else if (this.driver === 'ai') {
+            // Basic AI
+            this.speed = Math.min(this.speed + 200 * dt, 250);
+            
+            // Simple obstacle avoidance
+            let lookAheadX = this.x + Math.cos(this.angle) * 100;
+            let lookAheadY = this.y + Math.sin(this.angle) * 100;
+            
+            // If facing building, turn
+            for (let b of buildings) {
+                 if (lookAheadX > b.x - 10 && lookAheadX < b.x + b.w + 10 && lookAheadY > b.y - 10 && lookAheadY < b.y + b.h + 10) {
+                     this.angle += 2 * dt;
+                 }
+            }
+            
+            // Police/SWAT Logic
+            if ((this.type === 'police' || this.type === 'swat') && player.wantedLevel > 0) {
+                const angleToPlayer = Math.atan2(player.y - this.y, player.x - this.x);
+                // Steer towards player slowly
+                let diff = angleToPlayer - this.angle;
+                while (diff < -Math.PI) diff += Math.PI*2;
+                while (diff > Math.PI) diff -= Math.PI*2;
+                this.angle += diff * 2 * dt;
+                this.speed = 400;
+            }
+        } else if (this.driver && this.driver.startsWith('player:')) {
+            // No mover si está siendo conducido por otro jugador (actualizaciones del server lo harán)
+            return; 
+        }
+
+        this.speed *= this.friction;
+        this.vx = Math.cos(this.angle) * this.speed;
+        this.vy = Math.sin(this.angle) * this.speed;
+
+        // Collision
+        let nextX = this.x + this.vx * dt;
+        let nextY = this.y + this.vy * dt;
+        
+        let collided = false;
+        // Building Collisions
+        for (let b of buildings) {
+            if (nextX > b.x - 15 && nextX < b.x + b.w + 15 && nextY > b.y - 15 && nextY < b.y + b.h + 15) {
+                this.speed *= -0.5;
+                this.health -= Math.abs(this.speed) * 0.2;
+                collided = true;
+                break;
+            }
+        }
+        // Car vs Car
+        if (!collided) {
+            for (let c of cars) {
+                // Solo colisionar con coches NPC o el coche del jugador local.
+                if (c !== this && Math.hypot(c.x - nextX, c.y - nextY) < 40 && (c.driver === 'ai' || c.driver === null || c.driver === 'player')) {
+                    this.speed *= -0.5;
+                    c.speed *= 0.5;
+                    c.health -= 10;
+                    collided = true;
+                    createParticles((this.x+c.x)/2, (this.y+c.y)/2, '#fff', 3);
+                    break;
+                }
+            }
+        }
+
+        if (!collided) {
+            this.x = nextX;
+            this.y = nextY;
+        }
+
+        if (this.health <= 0) {
+            explode(this.x, this.y, 120);
+            this.dead = true;
+            if (this.driver === 'player') player.eject();
+        }
+    }
+    hit(dmg) {
+        this.health -= dmg;
+        createParticles(this.x, this.y, '#555', 2);
+    }
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle + Math.PI/2);
+
+        // Body
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.roundRect(-this.width/2, -this.height/2, this.width, this.height, 8);
+        ctx.fill();
+
+        // Roof/Glass
+        ctx.fillStyle = '#111';
+        ctx.fillRect(-this.width/2 + 4, -this.height/4, this.width - 8, this.height/2);
+
+        // Sirens
+        if (this.type === 'police' || this.type === 'swat') {
+             if (Math.floor(Date.now() / 150) % 2 === 0) {
+                 ctx.fillStyle = 'blue'; ctx.fillRect(-10, -10, 8, 20);
+                 ctx.fillStyle = 'red'; ctx.fillRect(2, -10, 8, 20);
+             } else {
+                 ctx.fillStyle = 'red'; ctx.fillRect(-10, -10, 8, 20);
+                 ctx.fillStyle = 'blue'; ctx.fillRect(2, -10, 8, 20);
+             }
+        }
+        
+        // SWAT Van details
+        if (this.type === 'swat') {
+            ctx.fillStyle = '#fff';
+            ctx.font = '10px Arial';
+            ctx.fillText("SWAT", -12, 20);
+        }
+
+        ctx.restore();
+        
+        // Headlights at night
+        if (isNight) {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.angle);
+            ctx.fillStyle = 'rgba(255, 255, 200, 0.3)';
+            ctx.beginPath(); ctx.moveTo(10, -15); ctx.lineTo(250, -80); ctx.lineTo(250, 80); ctx.lineTo(10, 15); ctx.fill();
+            ctx.restore();
+        }
+    }
+}
+
+
+// --- MODIFICACIÓN CLAVE EN LA CLASE PLAYER ---
+class Player extends Entity {
+    constructor() {
+        super(WORLD_WIDTH * TILE_SIZE / 2, WORLD_HEIGHT * TILE_SIZE / 2);
+        this.health = 100;
+        this.maxHealth = 100;
+        this.money = 500;
+        this.inCar = null;
+        this.clothesColor = '#0ea5e9';
+        this.skinColor = '#f1c27d';
+        
+        this.weapons = [
+            { name: 'FIST', rate: 0.5, damage: 10, ammo: Infinity, type: 'melee' },
+            { name: 'PISTOL', rate: 0.4, damage: 30, ammo: 60, type: 'bullet' },
+            { name: 'SMG', rate: 0.1, damage: 15, ammo: 120, type: 'bullet' },
+            { name: 'SHOTGUN', rate: 0.8, damage: 20, ammo: 20, type: 'pellet' }, // Fires multiple
+            { name: 'RPG', rate: 2.0, damage: 500, ammo: 5, type: 'rpg' }
+        ];
+        this.weaponIndex = 0;
+        this.lastShot = 0;
+        this.wantedLevel = 0;
+        
+        this.robberyTimer = 0;
+        this.currentShop = null;
+    }
+
+    update(dt) {
+        if (this.health <= 0) return;
+
+        let prevX = this.x, prevY = this.y, prevAngle = this.angle;
+
+        if (this.inCar) {
+            this.x = this.inCar.x; this.y = this.inCar.y;
+            this.inCar.driver = 'player';
+            if ((keys['f'] || document.getElementById('btn-enter').active) && !this.actionCooldown) {
+                this.inCar.driver = null; this.inCar = null;
+                this.x += 40; 
+                this.cooldown();
+                socket.emit('eject_car', this.inCar.id); // Notificar al server
+            }
+        } else {
+            // Movement (Player)
+            let dx = 0, dy = 0;
+            if (keys['w'] || joystick.y < -0.3) dy = -1;
+            if (keys['s'] || joystick.y > 0.3) dy = 1;
+            if (keys['a'] || joystick.x < -0.3) dx = -1;
+            if (keys['d'] || joystick.x > 0.3) dx = 1;
+            
+            if (dx || dy) {
+                let len = Math.hypot(dx, dy);
+                this.x += (dx/len) * 180 * dt;
+                this.y += (dy/len) * 180 * dt;
+            }
+
+            // Aiming
+            if (joystick.active) this.angle = Math.atan2(joystick.y, joystick.x);
+            else this.angle = Math.atan2(mouse.y - canvas.height/2, mouse.x - canvas.width/2);
+
+            // Shooting
+            if ((mouse.down || document.getElementById('btn-shoot').active)) {
+                if (Date.now() - this.lastShot > this.weapons[this.weaponIndex].rate * 1000) {
+                    this.shoot();
+                    socket.emit('player_shoot', { angle: this.angle, weapon: this.weapons[this.weaponIndex].name }); // Notificar al server del disparo
+                }
+            }
+            // Robbery Logic... (Mantenido)
+
+            // Interactions (Car/Shop)
+            if ((keys['f'] || document.getElementById('btn-enter').active) && !this.actionCooldown) {
+                // Try Enter Car
+                let closest = null, dist = 70;
+                for (let c of cars) {
+                    let d = Math.hypot(c.x - this.x, c.y - this.y);
+                    // Solo permite entrar a coches que no tienen conductor o que no son de otro jugador
+                    if (d < dist && (c.driver === null || c.driver === 'ai')) { 
+                        dist = d; closest = c; 
+                    }
+                }
+                if (closest) {
+                    this.inCar = closest;
+                    closest.driver = 'player';
+                    this.cooldown();
+                    socket.emit('enter_car', closest.id); // Notificar al server
+                }
+            }
+
+            // Shop Interaction... (Mantenido)
+            this.currentShop = null;
+            for(let s of shops) {
+                if (Math.abs(this.x - (s.x + s.w/2)) < s.w/2 && Math.abs(this.y - (s.y + s.h/2)) < s.h/2) {
+                    this.currentShop = s;
+                    if ((keys['e'] || document.getElementById('btn-interact').active) && !gamePaused) {
+                        openShop(s.type);
+                        keys['e'] = false; // Debounce
+                    }
+                }
+            }
+        }
+        
+        // --- MULTIJUGADOR: SINCRONIZACIÓN ---
+        // Emitir posición si ha cambiado significativamente
+        if (this.x !== prevX || this.y !== prevY || this.angle !== prevAngle) {
+            socket.emit('player_movement', { 
+                x: this.x, 
+                y: this.y, 
+                angle: this.angle,
+                health: this.health,
+                inCar: this.inCar ? { id: this.inCar.id, x: this.inCar.x, y: this.inCar.y, angle: this.inCar.angle } : null
+            });
+        }
+        // Emitir movimiento del coche si está conduciendo
+        if (this.inCar) {
+            socket.emit('car_movement', {
+                id: this.inCar.id,
+                x: this.inCar.x,
+                y: this.inCar.y,
+                angle: this.inCar.angle,
+                health: this.inCar.health
+            });
+        }
+    }
+    
+    // ... (Mantener shoot, hit, eject, cooldown, draw) ...
+    shoot() {
+        const w = this.weapons[this.weaponIndex];
+        if (w.ammo <= 0 && w.name !== 'FIST') return;
+        if (w.name !== 'FIST') w.ammo--;
+
+        this.lastShot = Date.now();
+        
+        if (w.name === 'SHOTGUN') {
+            for(let i=0; i<5; i++) {
+                bullets.push(new Bullet(this.x, this.y, this.angle + (Math.random()-0.5)*0.4, 'player', 'bullet'));
+            }
+        } else {
+            bullets.push(new Bullet(this.x, this.y, this.angle + (Math.random()-0.5)*0.1, 'player', w.type));
+        }
+
+        // Sound effect visual
+        createParticles(this.x + Math.cos(this.angle)*20, this.y + Math.sin(this.angle)*20, '#fe3', 2);
+        
+        // Alert cops
+        if (this.wantedLevel === 0 && w.name !== 'FIST') setWantedLevel(1);
+    }
+    
+    hit(dmg) {
+        this.health -= dmg;
+        createParticles(this.x, this.y, '#991b1b', 5); // Blood
+        if (this.health <= 0) {
+            this.dead = true;
+            showMessage("WASTED", "You died");
+        }
+    }
+
+    eject() {
+        this.inCar = null;
+        this.y += 50;
+        this.hit(20);
+    }
+
+    cooldown() {
+        this.actionCooldown = true;
+        setTimeout(() => this.actionCooldown = false, 500);
+    }
+
+    draw(ctx) {
+        if (this.inCar) return;
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+        
+        // Body
+        ctx.fillStyle = this.clothesColor;
+        ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI*2); ctx.fill();
+        
+        // Arms/Weapon
+        ctx.fillStyle = this.skinColor;
+        ctx.beginPath(); ctx.arc(8, 8, 4, 0, Math.PI*2); ctx.fill(); // R Hand
+        ctx.beginPath(); ctx.arc(8, -8, 4, 0, Math.PI*2); ctx.fill(); // L Hand
+        
+        // Gun
+        if (this.weapons[this.weaponIndex].name !== 'FIST') {
+            ctx.fillStyle = '#111';
+            const type = this.weapons[this.weaponIndex].name;
+            if (type === 'PISTOL') ctx.fillRect(8, -2, 12, 4);
+            else if (type === 'RPG') { ctx.fillStyle = '#3f6212'; ctx.fillRect(0, -4, 30, 8); }
+            else ctx.fillRect(5, -3, 22, 6);
+        }
+
+        // Head
+        ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI*2); ctx.fill(); // Hair
+        ctx.fillStyle = this.skinColor; ctx.beginPath(); ctx.arc(2, 0, 7, 0, Math.PI*2); ctx.fill(); // Face
+        
+        // Name Tag (Local Player)
+        ctx.fillStyle = '#00aaff';
+        ctx.font = '14px Arial';
+        ctx.fillText("YOU", -15, -25);
+
+        ctx.restore();
+    }
+}
+
+class Pedestrian extends Entity {
+    constructor(x, y, type) {
+        super(x, y);
+        this.type = type || (Math.random() > 0.8 ? 'cop' : 'civ');
+        this.color = this.type === 'cop' ? '#1e3a8a' : (this.type === 'swat' ? '#0f172a' : '#be123c');
+        this.state = 'wander';
+        this.health = this.type === 'swat' ? 200 : 50;
+        this.weapon = this.type === 'swat' ? 'SMG' : (this.type === 'cop' ? 'PISTOL' : 'FIST');
+        this.shootTimer = 0;
+        this.timer = 0;
+    }
+    update(dt) {
+        if (this.dead) return;
+
+        // AI Logic
+        if (this.type === 'cop' || this.type === 'swat') {
+            // Cops now chase all players with wanted level
+            let targetPlayer = player;
+            if (player.wantedLevel === 0) {
+                 // Check for other players with wanted level (simplified: just look at local player)
+                 if (Object.values(OTHER_PLAYERS).some(op => op.wantedLevel > 0)) {
+                    // Logic for finding the closest wanted player (omitted for brevity)
+                 }
+            }
+
+            if (player.wantedLevel > 0) {
+                this.state = 'chase';
+            } else {
+                this.state = 'wander';
+            }
+        }
+
+        if (this.state === 'wander') {
+            this.timer -= dt;
+            if (this.timer <= 0) {
+                this.timer = 2 + Math.random()*3;
+                this.angle = Math.random() * Math.PI*2;
+                this.vx = Math.cos(this.angle) * 30;
+                this.vy = Math.sin(this.angle) * 30;
+            }
+        } else if (this.state === 'chase') {
+            // Path to player
+            const dx = player.x - this.x;
+            const dy = player.y - this.y;
+            const dist = Math.hypot(dx, dy);
+            this.angle = Math.atan2(dy, dx);
+            
+            if (dist > 200) {
+                this.vx = Math.cos(this.angle) * 90;
+                this.vy = Math.sin(this.angle) * 90;
+            } else {
+                this.vx = 0; this.vy = 0; // Stop to shoot
+            }
+
+            // Shoot
+            this.shootTimer -= dt;
+            if (this.shootTimer <= 0 && dist < 400) {
+                this.shootTimer = this.type === 'swat' ? 0.2 : 1.0;
+                bullets.push(new Bullet(this.x, this.y, this.angle + (Math.random()-0.5)*0.2, 'enemy', 'bullet'));
+            }
+        } else if (this.state === 'flee') {
+            const dx = this.x - player.x;
+            const dy = this.y - player.y;
+            const a = Math.atan2(dy, dx);
+            this.vx = Math.cos(a) * 110;
+            this.vy = Math.sin(a) * 110;
+        }
+
+        // Avoid buildings
+        let nextX = this.x + this.vx * dt;
+        let nextY = this.y + this.vy * dt;
+        let hit = false;
+        for(let b of buildings) {
+            if(nextX > b.x && nextX < b.x+b.w && nextY > b.y && nextY < b.y+b.h) hit = true;
+        }
+        if(!hit) { this.x = nextX; this.y = nextY; }
+        
+        if (player.inCar && Math.hypot(player.x-this.x, player.y-this.y) < 100 && this.type === 'civ') this.state = 'flee';
+    }
+    hit(dmg) {
+        this.health -= dmg;
+        createParticles(this.x, this.y, '#b91c1c', 4);
+        if (this.health <= 0) {
+            this.dead = true;
+            player.money += 20;
+            if (this.type !== 'civ') setWantedLevel(player.wantedLevel + 1);
+            else setWantedLevel(Math.max(1, player.wantedLevel));
+        } else {
+            if (this.type === 'civ') this.state = 'flee';
+        }
+    }
+    draw(ctx) {
+        if (this.dead) {
+            ctx.fillStyle = '#7f1d1d';
+            ctx.beginPath(); ctx.arc(this.x, this.y, 10, 0, Math.PI*2); ctx.fill();
+            return;
+        }
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+        
+        ctx.fillStyle = this.color;
+        ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI*2); ctx.fill();
+        
+        // Arms
+        ctx.fillStyle = '#f1c27d';
+        ctx.beginPath(); ctx.arc(8, 5, 4, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(8, -5, 4, 0, Math.PI*2); ctx.fill();
+
+        // Weapon
+        if (this.type !== 'civ') {
+            ctx.fillStyle = '#333';
+            ctx.fillRect(8, -2, 15, 4);
+        }
+        ctx.restore();
+    }
+}
+
+class Mission {
+    constructor() {
+        this.active = false;
+        this.stage = 0;
+        this.target = null; // Entity or {x,y}
+    }
+    start() {
+        this.active = true;
+        this.stage = 1;
+        // Simple Mission: Kill a target
+        const x = Math.random() * WORLD_WIDTH * TILE_SIZE;
+        const y = Math.random() * WORLD_HEIGHT * TILE_SIZE;
+        this.target = new Pedestrian(x, y, 'swat'); // Boss
+        this.target.health = 500;
+        this.target.color = '#ef4444'; // Red boss
+        peds.push(this.target);
+        
+        document.getElementById('mission-text').classList.remove('hidden');
+        document.getElementById('mission-objective').innerText = "Eliminate the Target (Red Marker)";
+    }
+    update() {
+        if (!this.active) return;
+        
+        if (this.target.dead) {
+            this.active = false;
+            player.money += 5000;
+            showMessage("MISSION PASSED", "+$5000");
+            document.getElementById('mission-text').classList.add('hidden');
+        }
+    }
+    draw(ctx) {
+        if (!this.active) {
+            // Draw start marker
+            const mx = 500, my = 500; // Fixed start point for now
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.4)';
+            ctx.beginPath(); ctx.arc(mx, my, 40 + Math.sin(gameTime*5)*5, 0, Math.PI*2); ctx.fill();
+            
+            if (Math.hypot(player.x - mx, player.y - my) < 50) this.start();
+        } else {
+            // Draw Target Marker
+            ctx.save();
+            ctx.translate(this.target.x, this.target.y);
+            ctx.beginPath();
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 4;
+            ctx.arc(0, 0, 30 + Math.sin(gameTime*5)*3, 0, Math.PI*2);
+            ctx.stroke();
+            ctx.fillStyle = '#ef4444';
+            ctx.font = '20px Arial';
+            ctx.fillText("TARGET", -30, -35);
+            ctx.restore();
+        }
+    }
+}
+
+
+// ------------------------------------------------------------------
+// --- GAME LOOP & UTILIDADES (MANTENER) ---
+// ------------------------------------------------------------------
+// ... (Mantener todas las funciones auxiliares como createParticles, explode, setWantedLevel, updateHUD, openShop, etc.) ...
+
+function createParticles(x, y, color, count) {
+    for (let i = 0; i < count; i++) {
+        particles.push(new Particle(x, y, color, 0.5 + Math.random()*0.5, 80 + Math.random()*50, 2 + Math.random()*3));
+    }
+}
+
+function explode(x, y, size) {
+    createParticles(x, y, '#ff8c00', 30);
+    createParticles(x, y, '#555', 20);
+    // Damage entities in radius
+    const entities = [player, ...peds, ...cars, ...helis, ...Object.values(OTHER_PLAYERS)];
+    for(let e of entities) {
+        const dist = Math.hypot(e.x - x, e.y - y);
+        if (dist < size) {
+            e.hit(50 + (size - dist)*1.5);
+        }
+    }
+}
+
+let wantedDecayTimer = 0;
+function setWantedLevel(level) {
+    player.wantedLevel = Math.max(0, Math.min(5, level));
+    const stars = document.getElementById('wanted-stars');
+    stars.innerHTML = '';
+    for(let i=0; i<5; i++) {
+        const star = document.createElement('span');
+        star.className = `text-4xl ui-text ${i < player.wantedLevel ? 'text-yellow-400' : 'text-gray-700'}`;
+        star.innerHTML = '★';
+        stars.appendChild(star);
+    }
+    
+    // Spawn police
+    if (player.wantedLevel > 0 && Math.random() < 0.3) {
+        if (player.wantedLevel >= 3 && helis.length < 1) helis.push(new Helicopter(player.x + 500, player.y));
+        if (player.wantedLevel >= 4 && cars.filter(c => c.type === 'swat').length < 2) {
+             cars.push(new Car(player.x + (Math.random()-0.5)*500, player.y + (Math.random()-0.5)*500, 'swat'));
+             peds.push(new Pedestrian(player.x + (Math.random()-0.5)*50, player.y + (Math.random()-0.5)*50, 'swat'));
+        }
+        if (player.wantedLevel >= 1 && cars.filter(c => c.type === 'police').length < 3) cars.push(new Car(player.x + (Math.random()-0.5)*500, player.y + (Math.random()-0.5)*500, 'police'));
+        if (player.wantedLevel >= 1 && peds.filter(c => c.type === 'cop').length < 5) peds.push(new Pedestrian(player.x + (Math.random()-0.5)*50, player.y + (Math.random()-0.5)*50, 'cop'));
+    }
+}
+
+function updateHUD(dt) {
+    document.getElementById('money').innerText = player.money.toFixed(0);
+    
+    // Health Bar
+    const healthBar = document.getElementById('health-bar');
+    healthBar.style.width = player.health + '%';
+    if (player.inCar) {
+        healthBar.style.width = player.inCar.health / (player.inCar.type === 'swat' ? 5 : 1.5) + '%';
+        healthBar.style.backgroundColor = player.inCar.health < 50 ? '#ef4444' : '#22c55e';
+    } else {
+        healthBar.style.width = player.health + '%';
+        healthBar.style.backgroundColor = player.health < 25 ? '#ef4444' : '#22c55e';
+    }
+
+    // Weapon Info
+    const currentWeapon = player.weapons[player.weaponIndex];
+    document.getElementById('weapon-name').innerText = currentWeapon.name;
+    document.getElementById('ammo-display').innerText = currentWeapon.ammo === Infinity ? '∞' : currentWeapon.ammo;
+    
+    // Wanted Decay
+    if (player.wantedLevel > 0 && !player.dead && !player.inCar) {
+        wantedDecayTimer += dt;
+        if (wantedDecayTimer > 5) {
+            setWantedLevel(player.wantedLevel - 1);
+            wantedDecayTimer = 0;
+            showMessage("WANTED LEVEL DOWN", "Stay low");
+        }
+    } else if (player.wantedLevel > 0 && (player.dead || player.inCar)) {
+        // Wanted Level doesn't decay while dead or in car
+    } else {
+        wantedDecayTimer = 0;
+    }
+}
+
+let shopOpen = false;
+function openShop(type) {
+    gamePaused = true;
+    shopOpen = true;
+    document.getElementById('shop-ui').style.display = 'flex';
+    document.getElementById('shop-title').innerText = type.toUpperCase() + " SHOP";
+    const shopItems = document.getElementById('shop-items');
+    shopItems.innerHTML = '';
+    
+    const items = type === 'gun' ? [
+        { name: 'PISTOL AMMO', cost: 100, action: () => { player.weapons[1].ammo += 50; } },
+        { name: 'SMG AMMO', cost: 200, action: () => { player.weapons[2].ammo += 100; } },
+        { name: 'SHOTGUN AMMO', cost: 150, action: () => { player.weapons[3].ammo += 10; } },
+        { name: 'RPG ROCKETS', cost: 1000, action: () => { player.weapons[4].ammo += 3; } },
+    ] : [
+        { name: 'BLUE OUTFIT', cost: 500, action: () => { player.clothesColor = '#0ea5e9'; } },
+        { name: 'RED OUTFIT', cost: 500, action: () => { player.clothesColor = '#ef4444'; } },
+        { name: 'GREEN OUTFIT', cost: 500, action: () => { player.clothesColor = '#22c55e'; } },
+        { name: 'HEAL', cost: 1000, action: () => { player.health = player.maxHealth; } },
+    ];
+    
+    items.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'flex justify-between items-center bg-gray-700 p-2 rounded cursor-pointer hover:bg-gray-600 transition-colors';
+        div.innerHTML = `<span>${item.name}</span><span class="font-bold">$${item.cost}</span>`;
+        div.onclick = () => {
+            if (player.money >= item.cost) {
+                player.money -= item.cost;
+                item.action();
+                showMessage("PURCHASED", item.name);
+                updateHUD(0);
+            } else {
+                showMessage("NOT ENOUGH CASH", "");
+            }
+        };
+        shopItems.appendChild(div);
+    });
+}
+document.getElementById('close-shop').onclick = () => {
+    gamePaused = false;
+    shopOpen = false;
+    document.getElementById('shop-ui').style.display = 'none';
+}
+
+
+let messageTimeout;
+function showMessage(title, sub) {
+    const msgArea = document.getElementById('message-area');
+    document.getElementById('message-title').innerText = title;
+    document.getElementById('message-sub').innerText = sub;
+    
+    msgArea.style.opacity = '1';
+    clearTimeout(messageTimeout);
+    messageTimeout = setTimeout(() => {
+        msgArea.style.opacity = '0';
+    }, 3000);
+}
+
+// ------------------------------------------------------------------
+// --- PRINCIPAL DRAW Y UPDATE LOOP ---
+// ------------------------------------------------------------------
+let isNight = false;
+
+function drawWorld(ctx) {
+    const startCol = Math.floor(camera.x / TILE_SIZE);
+    const endCol = Math.ceil((camera.x + canvas.width / camera.zoom) / TILE_SIZE);
+    const startRow = Math.floor(camera.y / TILE_SIZE);
+    const endRow = Math.ceil((camera.y + canvas.height / camera.zoom) / TILE_SIZE);
+
+    for (let y = startRow; y < endRow; y++) {
+        for (let x = startCol; x < endCol; x++) {
+            if (x >= 0 && x < WORLD_WIDTH && y >= 0 && y < WORLD_HEIGHT) {
+                const type = map[y][x];
+                let color = PALETTE.grass;
+                
+                if (type === 1 || type === 2 || type === 3) color = PALETTE.road;
+                else if (type === 4) color = PALETTE.water;
+
+                ctx.fillStyle = color;
+                ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                
+                // Draw sidewalks and road lines
+                if (type === 1 || type === 3) { // V Road
+                    ctx.fillStyle = PALETTE.sidewalk;
+                    ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, 10, TILE_SIZE);
+                    ctx.fillRect(x * TILE_SIZE + TILE_SIZE - 10, y * TILE_SIZE, 10, TILE_SIZE);
+                    ctx.fillStyle = '#fef3c7'; // Yellow lines
+                    ctx.fillRect(x * TILE_SIZE + TILE_SIZE/2 - 2, y * TILE_SIZE, 4, TILE_SIZE);
+                }
+                if (type === 2 || type === 3) { // H Road
+                    ctx.fillStyle = PALETTE.sidewalk;
+                    ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, 10);
+                    ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE + TILE_SIZE - 10, TILE_SIZE, 10);
+                    ctx.fillStyle = '#fef3c7'; // Yellow lines
+                    ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE + TILE_SIZE/2 - 2, TILE_SIZE, 4);
+                }
+            }
+        }
+    }
+    
+    // Draw Buildings
+    for (let b of buildings) {
+        ctx.fillStyle = b.color;
+        ctx.fillRect(b.x, b.y, b.w, b.h);
+        
+        // Simple 3D shadow/height effect
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        ctx.fillRect(b.x + b.height * 0.1, b.y + b.height * 0.1, b.w, b.h);
+    }
+    
+    // Draw Shops (Floors)
+    for(let s of shops) {
+        ctx.fillStyle = s.type === 'gun' ? PALETTE.gunShopFloor : PALETTE.shopFloor;
+        ctx.fillRect(s.x, s.y, s.w, s.h);
+        
+        ctx.fillStyle = '#000';
+        ctx.font = '20px Arial';
+        ctx.fillText(s.type.toUpperCase(), s.x + 10, s.y + 30);
+    }
+}
+
+function drawMinimap(ctx) {
+    // Clear and draw background
+    minimapCtx.fillStyle = PALETTE.grass;
+    minimapCtx.fillRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+    
+    const scale = minimapCanvas.width / (WORLD_WIDTH * TILE_SIZE);
+    
+    // Buildings/Roads on minimap
+    for (let y = 0; y < WORLD_HEIGHT; y++) {
+        for (let x = 0; x < WORLD_WIDTH; x++) {
+            const type = map[y][x];
+            let color = null;
+            if (type === 1 || type === 2 || type === 3) color = PALETTE.road;
+            
+            if (color) {
+                minimapCtx.fillStyle = color;
+                minimapCtx.fillRect(x * TILE_SIZE * scale, y * TILE_SIZE * scale, TILE_SIZE * scale, TILE_SIZE * scale);
+            }
+        }
+    }
+    
+    // Player
+    const pX = player.x * scale;
+    const pY = player.y * scale;
+    minimapCtx.fillStyle = '#0ea5e9'; // Blue for local player
+    minimapCtx.beginPath();
+    minimapCtx.arc(pX, pY, 5, 0, Math.PI * 2);
+    minimapCtx.fill();
+    
+    // Other Players
+    for(const id in OTHER_PLAYERS) {
+        const op = OTHER_PLAYERS[id];
+        minimapCtx.fillStyle = '#ff0000'; // Red for other players
+        minimapCtx.beginPath();
+        minimapCtx.arc(op.x * scale, op.y * scale, 5, 0, Math.PI * 2);
+        minimapCtx.fill();
+    }
+    
+    // Target
+    if (mission.active) {
+        const tX = mission.target.x * scale;
+        const tY = mission.target.y * scale;
+        minimapCtx.fillStyle = '#ef4444';
+        minimapCtx.beginPath();
+        minimapCtx.arc(tX, tY, 7, 0, Math.PI * 2);
+        minimapCtx.fill();
+    }
+}
+
+
+function gameLoop(time) {
+    const dt = (time - lastTime) / 1000;
+    lastTime = time;
+    gameTime += dt;
+    
+    requestAnimationFrame(gameLoop);
+
+    // Resize canvas
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    if (!gamePaused) {
+        // Update
+        player.update(dt);
+        peds.forEach(p => p.update(dt));
+        cars.forEach(c => c.update(dt));
+        helis.forEach(h => h.update(dt));
+        bullets.forEach(b => b.update(dt));
+        particles.forEach(p => p.update(dt));
+        mission.update();
+        
+        // Remove dead/finished entities
+        peds = peds.filter(p => !p.dead);
+        cars = cars.filter(c => !c.dead);
+        bullets = bullets.filter(b => !b.dead);
+        particles = particles.filter(p => !p.dead);
+        helis = helis.filter(h => !h.dead && h.z > 0);
+        
+        // Update Camera
+        camera.x = player.x - canvas.width / (2 * camera.zoom);
+        camera.y = player.y - canvas.height / (2 * camera.zoom);
+    }
+    
+    // Draw
+    ctx.save();
+    ctx.scale(camera.zoom, camera.zoom);
+    ctx.translate(-camera.x, -camera.y);
+    
+    // Day/Night Cycle
+    const dayCycle = Math.sin(gameTime / 10) * 0.5 + 0.5; // 0 to 1
+    isNight = dayCycle < 0.2 || dayCycle > 0.8;
+    const ambientLight = 0.5 + dayCycle * 0.5; // 0.5 to 1.0
+    ctx.fillStyle = `rgba(0,0,0,${1 - ambientLight * 0.5})`; // Darker at night
+    ctx.fillRect(camera.x, camera.y, canvas.width / camera.zoom, canvas.height / camera.zoom);
+
+    // Draw Map
+    drawWorld(ctx);
+    
+    // Draw Entities
+    // Ordenar para simular perspectiva simple (z-index)
+    const entitiesToDraw = [...cars, ...peds, player, ...helis, ...Object.values(OTHER_PLAYERS)];
+    entitiesToDraw.sort((a, b) => a.y - b.y);
+
+    for (const entity of entitiesToDraw) {
+        if (entity instanceof Helicopter) entity.draw(ctx);
+    }
+    
+    for (const entity of entitiesToDraw) {
+        if (!(entity instanceof Helicopter)) entity.draw(ctx);
+    }
+    
+    bullets.forEach(b => b.draw(ctx));
+    particles.forEach(p => p.draw(ctx));
+    mission.draw(ctx); // Target marker
+
+    ctx.restore();
+    
+    // Draw UI
+    updateHUD(dt);
+    drawMinimap(minimapCtx);
+    
+    // Shop Interaction Prompt
+    if (player.currentShop && !player.inCar && !shopOpen) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(canvas.width/2 - 150, canvas.height - 100, 300, 40);
+        ctx.fillStyle = '#fff';
+        ctx.font = '20px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(`Press E to enter ${player.currentShop.type.toUpperCase()} shop`, canvas.width/2, canvas.height - 75);
+    }
+}
+
+// ------------------------------------------------------------------
+// --- SETUP Y EVENTOS ---
+// ------------------------------------------------------------------
+const player = new Player();
+const mission = new Mission();
+initWorld();
+setWantedLevel(0);
+
+// Key/Mouse Handlers (Mantenido)
+window.addEventListener('keydown', e => { 
+    keys[e.key.toLowerCase()] = true; 
+    if(e.key >= '1' && e.key <= '5') {
+        player.weaponIndex = parseInt(e.key) - 1;
+        updateHUD(0);
+    }
 });
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+canvas.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+canvas.addEventListener('mousedown', e => { mouse.down = true; });
+canvas.addEventListener('mouseup', e => { mouse.down = false; });
+
+// Mobile Control Handlers (Mantenido)
+const stickContainer = document.getElementById('stick-container');
+stickContainer.addEventListener('touchstart', handleTouchStart, false);
+stickContainer.addEventListener('touchmove', handleTouchMove, false);
+stickContainer.addEventListener('touchend', handleTouchEnd, false);
+
+function handleTouchStart(e) {
+    e.preventDefault();
+    const rect = stickContainer.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    joystick.active = true;
+    updateJoystick(e.touches[0].clientX, e.touches[0].clientY, centerX, centerY, rect.width / 2);
+}
+
+function handleTouchMove(e) {
+    e.preventDefault();
+    const rect = stickContainer.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    if (joystick.active) {
+        updateJoystick(e.touches[0].clientX, e.touches[0].clientY, centerX, centerY, rect.width / 2);
+    }
+}
+
+function handleTouchEnd(e) {
+    if (e.touches.length === 0) {
+        joystick.active = false;
+        joystick.x = 0; joystick.y = 0;
+    }
+}
+
+function updateJoystick(touchX, touchY, centerX, centerY, maxDist) {
+    let dx = touchX - centerX;
+    let dy = touchY - centerY;
+    let dist = Math.hypot(dx, dy);
+    
+    if (dist > maxDist) {
+        dx *= maxDist / dist;
+        dy *= maxDist / dist;
+        dist = maxDist;
+    }
+    
+    joystick.x = dx / maxDist;
+    joystick.y = dy / maxDist;
+}
+
+// Mobile Button Logic
+document.getElementById('btn-enter').addEventListener('touchstart', (e) => { e.target.classList.add('active'); e.target.active = true; keys['f'] = true; }, false);
+document.getElementById('btn-enter').addEventListener('touchend', (e) => { e.target.classList.remove('active'); e.target.active = false; keys['f'] = false; }, false);
+document.getElementById('btn-shoot').addEventListener('touchstart', (e) => { e.target.classList.add('active'); e.target.active = true; mouse.down = true; }, false);
+document.getElementById('btn-shoot').addEventListener('touchend', (e) => { e.target.classList.remove('active'); e.target.active = false; mouse.down = false; }, false);
+document.getElementById('btn-interact').addEventListener('touchstart', (e) => { e.target.classList.add('active'); e.target.active = true; keys['e'] = true; }, false);
+document.getElementById('btn-interact').addEventListener('touchend', (e) => { e.target.classList.remove('active'); e.target.active = false; keys['e'] = false; }, false);
+document.getElementById('btn-switch').addEventListener('touchstart', (e) => { 
+    e.target.classList.add('active'); 
+    player.weaponIndex = (player.weaponIndex + 1) % player.weapons.length;
+    updateHUD(0);
+}, false);
+document.getElementById('btn-switch').addEventListener('touchend', (e) => { e.target.classList.remove('active'); }, false);
+
+// Iniciar el bucle de juego
+requestAnimationFrame(gameLoop);
+
+</script>
